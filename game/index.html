@@ -3,36 +3,69 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aether Bastion</title>
+<link rel="icon" href="data:,">
+<title>Aether Bastion: Solar Citadel</title>
 <style>
-  html, body {
-    margin: 0;
-    height: 100%;
-    overflow: hidden;
-    background: #060913;
-    user-select: none;
-  }
-  #game {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
-    touch-action: none;
-    cursor: crosshair;
-  }
-  #status {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
+  :root{--glass:rgba(15,23,42,.80);--glass-hi:rgba(20,31,56,.90);--bdr:rgba(245,196,108,.30);--gold:#fbbf24;--cyan:#38bdf8;--cyan-hi:#67e8f9;--text:#f8fafc;--muted:#cbd5e1;--font:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#1a2844;color:var(--text);font-family:var(--font);user-select:none}
+  #game,#overlay2d,#hud,#overlays{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #game{touch-action:none;cursor:crosshair}
+  #overlay2d{pointer-events:none;z-index:4}
+  #hud{pointer-events:none;z-index:8;display:none}
+  #hud.active{display:block}
+  .hud-card{position:absolute;background:var(--glass);border:1px solid var(--bdr);border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(5,10,24,.42);padding:8px 11px}
+  .hud-tl{top:12px;left:14px;width:248px}
+  .hud-tc{top:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:14px;padding:7px 14px}
+  .hud-tr,.hud-bl,.hud-br{position:absolute;display:flex;flex-direction:column;gap:6px}
+  .hud-tr{top:12px;right:14px;align-items:flex-end;gap:7px}
+  .hud-bl{bottom:12px;left:14px;max-width:460px}
+  .hud-br{bottom:12px;right:14px;align-items:flex-end}
+  .bar-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;letter-spacing:.05em;margin-bottom:3px}
+  .bar-track{height:7px;border-radius:99px;background:rgba(15,23,42,.9);overflow:hidden;border:1px solid rgba(148,163,184,.22);margin-bottom:6px}
+  .bar-fill{height:100%;border-radius:99px;transition:width .08s linear}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .pill-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:7px;background:var(--glass);border:1px solid rgba(148,163,184,.28);font-size:11px;font-weight:700;letter-spacing:.04em}
+  .btn-hud{pointer-events:auto;cursor:pointer;color:var(--text);background:var(--glass);border:1px solid rgba(148,163,184,.34);border-radius:7px;padding:4px 9px;font:700 11px var(--font);letter-spacing:.04em;transition:all .12s}
+  .btn-hud:hover{border-color:var(--gold);background:var(--glass-hi)}
+  .btn-hud.on{border-color:var(--cyan);color:var(--cyan-hi);background:rgba(14,116,144,.35)}
+  .build-slot{pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:7px;padding:6px 10px;border-radius:9px;background:var(--glass);border:1px solid var(--bdr);color:var(--text);font-family:var(--font);transition:all .12s}
+  .build-slot:hover{border-color:var(--gold);transform:translateY(-1px)}
+  .build-slot.dim{opacity:.56}
+  .build-key{width:19px;height:19px;border-radius:5px;display:grid;place-items:center;font-size:11px;font-weight:800;background:rgba(251,191,36,.2);color:var(--gold);border:1px solid rgba(251,191,36,.45)}
+  .boss-bar-wrap{position:absolute;top:58px;left:50%;transform:translateX(-50%);width:380px;padding:6px 12px;border-radius:9px;background:rgba(24,14,24,.84);border:1px solid rgba(251,113,133,.45);display:none}
+  .boss-bar-wrap.active{display:block}
+  #overlays{z-index:16;pointer-events:none}
+  .overlay-backdrop{position:absolute;inset:0;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(10,15,30,.56);backdrop-filter:blur(5px)}
+  .title-dock{position:absolute;inset:0;pointer-events:auto;display:flex;align-items:center;padding:28px 38px;background:linear-gradient(90deg,rgba(12,18,34,.86) 0%,rgba(12,18,34,.55) 40%,rgba(12,18,34,0) 68%)}
+  .title-card{width:444px;background:rgba(15,23,42,.86);border:1px solid rgba(251,191,36,.36);border-radius:16px;padding:22px 24px;box-shadow:0 20px 48px rgba(4,8,20,.65);backdrop-filter:blur(10px)}
+  .eyebrow{font-size:11px;font-weight:800;letter-spacing:.16em;color:var(--gold);text-transform:uppercase;margin-bottom:6px}
+  .h-title{margin:0;font-size:31px;font-weight:900;letter-spacing:.02em;line-height:1.08;background:linear-gradient(90deg,#fef3c7 0%,#fbbf24 55%,#67e8f9 100%);-webkit-background-clip:text;color:transparent}
+  .sub-copy{margin:8px 0 14px;font-size:13px;line-height:1.45;color:var(--muted)}
+  .diff-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+  .diff-btn{cursor:pointer;text-align:left;padding:9px 10px;border-radius:10px;background:rgba(30,41,59,.72);border:1px solid rgba(148,163,184,.28);color:var(--text);font-family:var(--font);transition:all .12s}
+  .diff-btn.active{background:rgba(251,191,36,.16);border-color:var(--gold);box-shadow:0 0 16px rgba(251,191,36,.22)}
+  .primary-btn{cursor:pointer;border:none;border-radius:10px;padding:11px 18px;font:800 14px var(--font);letter-spacing:.06em;text-transform:uppercase;color:#0f172a;background:linear-gradient(135deg,#fde68a 0%,#fbbf24 55%,#f59e0b 100%);box-shadow:0 8px 24px rgba(245,158,11,.36)}
+  .sec-btn{cursor:pointer;border-radius:10px;padding:10px 16px;font:700 13px var(--font);color:var(--text);background:rgba(30,41,59,.85);border:1px solid rgba(148,163,184,.38)}
+  .armory-panel{width:910px;max-width:calc(100vw - 40px);padding:22px 24px;background:rgba(12,19,36,.92);border:1px solid var(--bdr);border-radius:16px;box-shadow:0 24px 64px rgba(4,8,20,.72)}
+  .armory-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:14px 0}
+  .upg-card{cursor:pointer;text-align:left;padding:15px;border-radius:12px;background:rgba(23,33,56,.92);border:1px solid rgba(148,163,184,.3);color:var(--text);font-family:var(--font);display:flex;flex-direction:column;gap:8px;transition:all .12s}
+  .upg-card:hover{transform:translateY(-3px);border-color:var(--gold)}
+  .victory-panel{width:640px;max-width:calc(100vw - 36px);padding:24px 28px;background:rgba(13,21,40,.93);border:1px solid rgba(251,191,36,.48);border-radius:16px;box-shadow:0 24px 64px rgba(4,8,20,.75);text-align:center}
+  .stats-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:16px 0}
+  .stat-box{padding:10px 6px;border-radius:10px;background:rgba(30,41,59,.72);border:1px solid rgba(148,163,184,.22)}
+  #status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 </style>
+<script type="importmap">
+{"imports":{"three":"./vendor/three/three.module.min.js"}}
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Aether Bastion: twin-stick orbital arena shooter. Move with WASD or Arrow keys, aim and fire with mouse, Space to phase dash, Q for EMP nova."></canvas>
+<canvas id="game" aria-label="Aether Bastion: Solar Citadel 3D tactical twin-stick wave defense"></canvas>
+<canvas id="overlay2d"></canvas>
+<div id="hud"></div>
+<div id="overlays"></div>
 <p id="status" role="status" aria-live="polite"></p>
 <script type="module" src="./src/main.js"></script>
 </body>

@@ -1,5 +1,6 @@
-// Unified keyboard + mouse aim + UI button click input mapped cleanly to 1280x720 coordinates.
-import { FIELD } from './config.js';
+/**
+ * Unified keyboard and pointer input controller with zero-allocation 3D ground plane aiming.
+ */
 
 export const ACT_CONFIRM = 1;
 export const ACT_PAUSE = 2;
@@ -11,30 +12,30 @@ export const ACT_RESTART = 64;
 export const ACT_PICK_1 = 128;
 export const ACT_PICK_2 = 256;
 export const ACT_PICK_3 = 512;
+export const ACT_GUIDE = 1024;
 
 const UP_KEYS = new Set(['KeyW', 'ArrowUp']);
 const DOWN_KEYS = new Set(['KeyS', 'ArrowDown']);
 const LEFT_KEYS = new Set(['KeyA', 'ArrowLeft']);
 const RIGHT_KEYS = new Set(['KeyD', 'ArrowRight']);
 
-export function createInput(canvas) {
+/**
+ * Attaches keyboard and pointer event listeners onto the Three.js canvas.
+ * @param {HTMLCanvasElement} canvas
+ * @param {{ screenToWorld: Function }} sceneCtx
+ */
+export function createControls(canvas, sceneCtx) {
   const held = new Set();
   let actions = 0;
   let mouseDown = false;
   let mouseActive = false;
-  let pointerX = FIELD.width / 2;
-  let pointerY = FIELD.height / 2 - 100;
-  const clicks = [];
+  let clientX = 640;
+  let clientY = 300;
+  const worldAim = { x: 0, z: -4 };
 
-  function toLogical(clientX, clientY) {
+  function updateWorldAim() {
     const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const scale = Math.min(rect.width / FIELD.width, rect.height / FIELD.height);
-    const offsetX = (rect.width - FIELD.width * scale) / 2;
-    const offsetY = (rect.height - FIELD.height * scale) / 2;
-    pointerX = Math.max(0, Math.min(FIELD.width, (clientX - rect.left - offsetX) / scale));
-    pointerY = Math.max(0, Math.min(FIELD.height, (clientY - rect.top - offsetY) / scale));
-    mouseActive = true;
+    sceneCtx.screenToWorld(clientX, clientY, rect, worldAim);
   }
 
   window.addEventListener('keydown', (e) => {
@@ -55,6 +56,8 @@ export function createInput(canvas) {
     } else if (e.code === 'KeyP' || e.code === 'Escape') {
       if (!e.repeat) actions |= ACT_PAUSE;
       e.preventDefault();
+    } else if (e.code === 'KeyH') {
+      if (!e.repeat) actions |= ACT_GUIDE;
     } else if (e.code === 'KeyF') {
       if (!e.repeat) actions |= ACT_AUTOFIRE;
     } else if (e.code === 'KeyM') {
@@ -72,70 +75,59 @@ export function createInput(canvas) {
     }
   });
 
-  window.addEventListener('keyup', (e) => {
-    held.delete(e.code);
-  });
-
-  window.addEventListener('blur', () => {
-    held.clear();
-    mouseDown = false;
-  });
+  window.addEventListener('keyup', (e) => held.delete(e.code));
+  window.addEventListener('blur', () => { held.clear(); mouseDown = false; });
 
   canvas.addEventListener('pointermove', (e) => {
-    toLogical(e.clientX, e.clientY);
+    clientX = e.clientX;
+    clientY = e.clientY;
+    mouseActive = true;
+    updateWorldAim();
   });
 
   canvas.addEventListener('pointerdown', (e) => {
-    toLogical(e.clientX, e.clientY);
+    clientX = e.clientX;
+    clientY = e.clientY;
+    mouseActive = true;
+    updateWorldAim();
     if (e.button === 2) {
       actions |= ACT_EMP;
       return;
     }
     mouseDown = true;
-    clicks.push({ x: pointerX, y: pointerY });
   });
 
   window.addEventListener('pointerup', (e) => {
     if (e.button === 0) mouseDown = false;
   });
 
-  canvas.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   return {
     moveAxis() {
       let x = 0;
-      let y = 0;
+      let z = 0;
       for (const code of held) {
         if (LEFT_KEYS.has(code)) x -= 1;
         else if (RIGHT_KEYS.has(code)) x += 1;
-        else if (UP_KEYS.has(code)) y -= 1;
-        else if (DOWN_KEYS.has(code)) y += 1;
+        else if (UP_KEYS.has(code)) z -= 1;
+        else if (DOWN_KEYS.has(code)) z += 1;
       }
-      x = Math.max(-1, Math.min(1, x));
-      y = Math.max(-1, Math.min(1, y));
-      const len = Math.hypot(x, y);
-      if (len > 1) {
-        x /= len;
-        y /= len;
-      }
-      return { x, y };
+      const len = Math.hypot(x, z);
+      if (len > 1) { x /= len; z /= len; }
+      return { x, z };
     },
     isFiring(autoFire) {
       return Boolean(autoFire || mouseDown || held.has('KeyJ'));
     },
     pointer() {
-      return { x: pointerX, y: pointerY, active: mouseActive };
+      if (mouseActive) updateWorldAim();
+      return { x: worldAim.x, z: worldAim.z, screenX: clientX, screenY: clientY, active: mouseActive };
     },
     takeActions() {
       const taken = actions;
       actions = 0;
       return taken;
-    },
-    takeClicks() {
-      if (clicks.length === 0) return [];
-      return clicks.splice(0, clicks.length);
     },
   };
 }

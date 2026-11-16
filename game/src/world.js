@@ -1,14 +1,24 @@
-// Pure deterministic arena simulation engine (zero DOM/Canvas/WebAudio dependencies).
+// Pure deterministic arena simulation engine integrating waves, 5 enemy archetypes,
+// 3-phase Archon Sovereign boss, interactive energy pylons, relic synergies, and Overcharge.
 import {
   BOSS_CFG,
   DIFFICULTIES,
   ENEMY_CFG,
   FIELD,
   PLAYER_CFG,
+  PYLON_CFG,
   UPGRADES,
   WAVES,
 } from './config.js';
-import { acquire, createPlayer, createPools, createStars } from './entities.js';
+import { acquire, createNebulae, createPlayer, createPools, createStars } from './entities.js';
+import {
+  createArenaPylons,
+  damagePylonFromPlayerBolt,
+  interceptEnemyBoltWithPylons,
+  resetArenaPylons,
+  updateArenaPylons,
+} from './pylons.js';
+import { evaluateSynergies, updateOverchargeState } from './synergies.js';
 
 export const EV_SHOOT = 1;
 export const EV_CRIT = 2;
@@ -23,6 +33,8 @@ export const EV_BOSS = 512;
 export const EV_VICTORY = 1024;
 export const EV_OVER = 2048;
 export const EV_SNIPER_WARN = 4096;
+export const EV_PYLON = 8192;
+export const EV_OVERCHARGE = 16384;
 
 function clamp(v, min, max) {
   return v < min ? min : v > max ? max : v;
@@ -54,6 +66,8 @@ function distToSegmentSq(px, py, ax, ay, bx, by) {
 export function createWorld(random) {
   const pools = createPools();
   const stars = createStars(random);
+  const nebulae = createNebulae();
+  const pylons = createArenaPylons();
   const player = createPlayer();
 
   const state = {
@@ -62,6 +76,8 @@ export function createWorld(random) {
     player,
     pools,
     stars,
+    nebulae,
+    pylons,
     waveIndex: 0,
     waveElapsed: 0,
     waveBannerTimer: 0,
@@ -70,11 +86,13 @@ export function createWorld(random) {
     elapsed: 0,
     score: 0,
     xp: 0,
-    xpNext: 105,
+    xpNext: 95,
     playerLevel: 1,
     combo: 1,
     comboTimer: 0,
     peakCombo: 1,
+    overchargeMeter: 0,
+    overchargeTimer: 0,
     kills: 0,
     shotsFired: 0,
     shotsHit: 0,
@@ -84,9 +102,12 @@ export function createWorld(random) {
     gridPulseX: FIELD.width / 2,
     gridPulseY: FIELD.height / 2,
     upgrades: {},
+    synergies: [],
+    synergyFlags: { solarStorm: false, singularityRail: false, aegisNexus: false, phaseOverdrive: false },
     upgradeChoices: [],
     boss: null,
     afterimages: [],
+    arcs: [],
     totalWaveCount: WAVES.length,
   };
 
@@ -109,7 +130,7 @@ export function createWorld(random) {
     for (let i = 0; i < count; i += 1) {
       const a = random.range(0, Math.PI * 2);
       const sp = random.range(speedMin, speedMax);
-      spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp, size * random.range(0.7, 1.3), random.range(0.22, 0.52), color);
+      spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp, size * random.range(0.7, 1.3), random.range(0.22, 0.55), color);
     }
   }
 
@@ -278,9 +299,16 @@ export function createWorld(random) {
     }
   }
 
+  function refreshSynergies() {
+    const res = evaluateSynergies(state.upgrades);
+    state.synergies = res.active;
+    state.synergyFlags = res.flags;
+  }
+
   function reset(diffId = state.difficultyId) {
     setDifficulty(diffId);
     Object.assign(player, createPlayer());
+    resetArenaPylons(pylons);
     for (const key of Object.keys(pools)) {
       const list = pools[key];
       for (let i = 0; i < list.length; i += 1) list[i].active = false;
@@ -298,6 +326,8 @@ export function createWorld(random) {
     state.combo = 1;
     state.comboTimer = 0;
     state.peakCombo = 1;
+    state.overchargeMeter = 0;
+    state.overchargeTimer = 0;
     state.kills = 0;
     state.shotsFired = 0;
     state.shotsHit = 0;
@@ -306,10 +336,11 @@ export function createWorld(random) {
     state.gridPulse = 0;
     state.upgrades = {};
     state.upgradeChoices = [];
+    refreshSynergies();
     state.boss = null;
     state.afterimages.length = 0;
+    state.arcs.length = 0;
 
-    // Seed initial opening skirmish immediately so arena is active on frame 1.
     spawnEnemy('swarmer');
     spawnEnemy('swarmer');
     spawnEnemy('sniper');
@@ -319,8 +350,7 @@ export function createWorld(random) {
     const eligible = [];
     for (let i = 0; i < UPGRADES.length; i += 1) {
       const u = UPGRADES[i];
-      const count = state.upgrades[u.id] || 0;
-      if (count < u.maxStacks) eligible.push(u);
+      if ((state.upgrades[u.id] || 0) < u.maxStacks) eligible.push(u);
     }
     const pool = eligible.slice();
     const chosen = [];
@@ -335,38 +365,17 @@ export function createWorld(random) {
     const picked = state.upgradeChoices[choiceIndex];
     if (!picked) return null;
     state.upgrades[picked.id] = (state.upgrades[picked.id] || 0) + 1;
-    if (picked.id === 'twin_bolts') {
-      player.boltCount += 1;
-    } else if (picked.id === 'rapid_cycle') {
-      player.fireInterval *= 0.82;
-      player.boltSpeed *= 1.14;
-    } else if (picked.id === 'heavy_plasma') {
-      player.boltDamage *= 1.28;
-      player.critChance = Math.min(0.65, player.critChance + 0.12);
-    } else if (picked.id === 'pierce_rail') {
-      player.pierce += 1;
-      player.boltDamage *= 1.15;
-    } else if (picked.id === 'aegis_matrix') {
-      player.maxShield += 35;
-      player.shield = player.maxShield;
-      player.shieldRegen *= 1.35;
-    } else if (picked.id === 'phase_thrusters') {
-      player.speed *= 1.14;
-      player.dashCooldown *= 0.78;
-      player.dashWake += 1;
-    } else if (picked.id === 'emp_overcharge') {
-      player.empRadius *= 1.28;
-      player.empDamage += 36;
-      player.empCooldown *= 0.8;
-    } else if (picked.id === 'orbital_drone') {
-      player.drones += 1;
-    } else if (picked.id === 'nano_plating') {
-      player.maxHp += 35;
-      player.hp = Math.min(player.maxHp, player.hp + 45);
-    } else if (picked.id === 'magnet_core') {
-      player.pickupRadius *= 1.7;
-      player.yieldMult *= 1.2;
-    }
+    if (picked.id === 'twin_bolts') player.boltCount += 1;
+    else if (picked.id === 'rapid_cycle') { player.fireInterval *= 0.82; player.boltSpeed *= 1.14; }
+    else if (picked.id === 'heavy_plasma') { player.boltDamage *= 1.28; player.critChance = Math.min(0.65, player.critChance + 0.12); }
+    else if (picked.id === 'pierce_rail') { player.pierce += 1; player.boltDamage *= 1.15; }
+    else if (picked.id === 'aegis_matrix') { player.maxShield += 35; player.shield = player.maxShield; player.shieldRegen *= 1.35; }
+    else if (picked.id === 'phase_thrusters') { player.speed *= 1.14; player.dashCooldown *= 0.78; player.dashWake += 1; }
+    else if (picked.id === 'emp_overcharge') { player.empRadius *= 1.28; player.empDamage += 36; player.empCooldown *= 0.8; }
+    else if (picked.id === 'orbital_drone') player.drones += 1;
+    else if (picked.id === 'nano_plating') { player.maxHp += 35; player.hp = Math.min(player.maxHp, player.hp + 45); }
+    else if (picked.id === 'magnet_core') { player.pickupRadius *= 1.7; player.yieldMult *= 1.2; }
+    refreshSynergies();
     state.upgradeChoices = [];
     spawnRing(player.x, player.y, 130, 0.45, picked.color, 4);
     spawnText(player.x, player.y - 26, picked.name.toUpperCase(), picked.color, 16);
@@ -408,7 +417,7 @@ export function createWorld(random) {
       spawnRing(e.x, e.y, 190, 0.55, '#f43f5e', 4);
       spawnBurst(e.x, e.y, '#fbbf24', 45, 90, 360, 4.5);
       spawnBurst(e.x, e.y, '#38bdf8', 25, 60, 280, 3.5);
-      spawnText(e.x, e.y - 20, `+${bossScore}`, '#fbbf24', 24);
+      spawnText(e.x, e.y - 20, `+${bossScore.toLocaleString('en-US')}`, '#fbbf24', 24);
       state.shake = 16;
       state.gridPulse = 1;
       state.gridPulseX = e.x;
@@ -421,6 +430,13 @@ export function createWorld(random) {
     state.combo = Math.min(8, Math.round((state.combo + 0.25) * 100) / 100);
     state.comboTimer = 3.8;
     if (state.combo > state.peakCombo) state.peakCombo = state.combo;
+
+    let extraEvents = 0;
+    if (!harmless && updateOverchargeState(state, 0, 11)) {
+      extraEvents |= EV_OVERCHARGE;
+      spawnRing(player.x, player.y, 175, 0.45, '#fbbf24', 4);
+      spawnText(player.x, player.y - 30, 'OVERCHARGE!', '#fbbf24', 17);
+    }
 
     const gained = Math.round(cfg.score * state.difficulty.scoreMult * state.combo * player.yieldMult);
     if (!harmless) state.score += gained;
@@ -442,7 +458,7 @@ export function createWorld(random) {
         }
       }
     }
-    return EV_KILL;
+    return EV_KILL | extraEvents;
   }
 
   function damageEnemy(e, index, rawDmg, hitAngle, crit, bypassShield, harmless) {
@@ -457,11 +473,7 @@ export function createWorld(random) {
         spawnBurst(
           e.x + Math.cos(e.angle) * e.radius,
           e.y + Math.sin(e.angle) * e.radius,
-          '#67e8f9',
-          5,
-          80,
-          170,
-          2.2,
+          '#67e8f9', 5, 80, 170, 2.2,
         );
         spawnText(e.x, e.y - e.radius - 6, 'BLOCK', '#67e8f9', 11);
       }
@@ -474,10 +486,22 @@ export function createWorld(random) {
     if (crit) {
       events |= EV_CRIT;
       spawnText(e.x + random.range(-8, 8), e.y - e.radius - 4, `${dealt}!`, '#fbbf24', 16);
+      if (state.synergyFlags.singularityRail && !bypassShield) {
+        spawnRing(e.x, e.y, 76, 0.25, '#fbbf24', 2.5);
+        for (let k = 0; k < pools.enemies.length; k += 1) {
+          const near = pools.enemies[k];
+          if (!near.active || k === index) continue;
+          if (Math.hypot(near.x - e.x, near.y - e.y) <= 76 + near.radius) {
+            near.hp -= Math.round(dealt * 0.45);
+            near.flash = 0.08;
+            if (near.hp <= 0) events |= killEnemy(near, k, harmless);
+          }
+        }
+      }
     } else if (dealt >= 12) {
       spawnText(e.x + random.range(-6, 6), e.y - e.radius, `${dealt}`, '#e2e8f0', 12);
     }
-    if (e.hp <= 0) events |= killEnemy(e, index, harmless);
+    if (e.active && e.hp <= 0) events |= killEnemy(e, index, harmless);
     return events;
   }
 
@@ -494,7 +518,6 @@ export function createWorld(random) {
       state.shake = Math.max(state.shake, 11);
       state.waveBannerText = targetPhase === 2 ? 'ARCHON PHASE II · SIEGE BARRAGE' : 'ARCHON PHASE III · OVERDRIVE';
       state.waveBannerTimer = 2.0;
-      // Clear immediate overlapping enemy bolts during phase shift for fairness.
       for (let i = 0; i < pools.enemyBolts.length; i += 1) {
         if (pools.enemyBolts[i].active) pools.enemyBolts[i].active = false;
       }
@@ -504,16 +527,12 @@ export function createWorld(random) {
     const toPlayer = Math.atan2(player.y - e.y, player.x - e.x);
     e.angle = moveTowardAngle(e.angle, toPlayer, 2.2 * dt);
 
-    // Boss dash surge in Phase 3 or orbital weave otherwise.
     if (e.dashVx !== 0 || e.dashVy !== 0) {
       e.x += e.dashVx * dt;
       e.y += e.dashVy * dt;
       e.dashVx *= Math.pow(0.08, dt);
       e.dashVy *= Math.pow(0.08, dt);
-      if (Math.hypot(e.dashVx, e.dashVy) < 28) {
-        e.dashVx = 0;
-        e.dashVy = 0;
-      }
+      if (Math.hypot(e.dashVx, e.dashVy) < 28) { e.dashVx = 0; e.dashVy = 0; }
     } else {
       const targetX = (FIELD.arenaLeft + FIELD.arenaRight) / 2 + Math.cos(e.phaseTimer * 0.72) * 340;
       const targetY = FIELD.arenaTop + 145 + Math.sin(e.phaseTimer * 1.15) * 65;
@@ -542,12 +561,7 @@ export function createWorld(random) {
             spawnEnemyBolt(
               e.x + Math.cos(e.aimAngle + s * 0.14) * 34,
               e.y + Math.sin(e.aimAngle + s * 0.14) * 34,
-              e.aimAngle + s * 0.06,
-              760,
-              20,
-              '#fbbf24',
-              6.5,
-              true,
+              e.aimAngle + s * 0.06, 760, 20, '#fbbf24', 6.5, true,
             );
           }
           spawnBurst(e.x, e.y, '#fbbf24', 10, 80, 210, 3);
@@ -573,7 +587,6 @@ export function createWorld(random) {
         e.timer = 1.6;
         events |= EV_SNIPER_WARN;
       } else {
-        // Phase 2/3 mortar barrage near player.
         const count = e.bossPhase === 3 ? 3 : 2;
         for (let m = 0; m < count; m += 1) {
           const mortar = acquire(pools.mortars);
@@ -594,10 +607,7 @@ export function createWorld(random) {
 
   function stepEnemy(e, dt, harmless) {
     if (e.flash > 0) e.flash = Math.max(0, e.flash - dt);
-    if (e.stun > 0) {
-      e.stun = Math.max(0, e.stun - dt);
-      return 0;
-    }
+    if (e.stun > 0) { e.stun = Math.max(0, e.stun - dt); return 0; }
     if (e.isBoss) return stepBoss(e, dt, harmless);
 
     let events = 0;
@@ -642,12 +652,7 @@ export function createWorld(random) {
           spawnEnemyBolt(
             e.x + Math.cos(e.aimAngle) * (e.radius + 6),
             e.y + Math.sin(e.aimAngle) * (e.radius + 6),
-            e.aimAngle,
-            ENEMY_CFG.sniper.boltSpeed,
-            ENEMY_CFG.sniper.dmg,
-            '#ffb703',
-            5.5,
-            true,
+            e.aimAngle, ENEMY_CFG.sniper.boltSpeed, ENEMY_CFG.sniper.dmg, '#ffb703', 5.5, true,
           );
           spawnBurst(e.x + Math.cos(e.aimAngle) * 16, e.y + Math.sin(e.aimAngle) * 16, '#ffb703', 6, 70, 170, 2.5);
         }
@@ -679,11 +684,7 @@ export function createWorld(random) {
           spawnEnemyBolt(
             e.x + Math.cos(e.angle) * (e.radius + 4),
             e.y + Math.sin(e.angle) * (e.radius + 4),
-            e.angle + s * 0.25,
-            ENEMY_CFG.bastion.boltSpeed,
-            ENEMY_CFG.bastion.dmg,
-            '#38bdf8',
-            5.2,
+            e.angle + s * 0.25, ENEMY_CFG.bastion.boltSpeed, ENEMY_CFG.bastion.dmg, '#38bdf8', 5.2,
           );
         }
       }
@@ -737,26 +738,20 @@ export function createWorld(random) {
     if (state.gridPulse > 0) state.gridPulse = Math.max(0, state.gridPulse - dt * 2.1);
     if (state.waveBannerTimer > 0) state.waveBannerTimer = Math.max(0, state.waveBannerTimer - dt);
 
-    // Parallax starfield drift.
+    updateArenaPylons(pylons, dt);
+    updateOverchargeState(state, dt, 0);
+
     for (let i = 0; i < stars.length; i += 1) {
       const s = stars[i];
       s.y += s.speed * dt;
-      if (s.y > FIELD.height) {
-        s.y = -2;
-        s.x = random.range(0, FIELD.width);
-      }
+      if (s.y > FIELD.height) { s.y = -2; s.x = random.range(0, FIELD.width); }
     }
 
-    // Combo decay.
     if (state.combo > 1) {
       state.comboTimer -= dt;
-      if (state.comboTimer <= 0) {
-        state.combo = 1;
-        state.comboTimer = 0;
-      }
+      if (state.comboTimer <= 0) { state.combo = 1; state.comboTimer = 0; }
     }
 
-    // Cooldowns & shield recovery.
     if (player.fireTimer > 0) player.fireTimer = Math.max(0, player.fireTimer - dt);
     if (player.dashTimer > 0) player.dashTimer = Math.max(0, player.dashTimer - dt);
     if (player.dashInvulnTimer > 0) player.dashInvulnTimer = Math.max(0, player.dashInvulnTimer - dt);
@@ -771,7 +766,6 @@ export function createWorld(random) {
       player.shield = Math.min(player.maxShield, player.shield + player.shieldRegen * regenMult * dt);
     }
 
-    // Gentle scenic pilot when on title screen.
     let moveX = ctrl.moveX || 0;
     let moveY = ctrl.moveY || 0;
     if (harmless) {
@@ -784,7 +778,6 @@ export function createWorld(random) {
       moveY = dy / d;
     }
 
-    // Dash trigger.
     if (!harmless && ctrl.dash && player.dashTimer === 0 && player.dashActiveTimer === 0) {
       const dashAngle = moveX !== 0 || moveY !== 0 ? Math.atan2(moveY, moveX) : player.aimAngle;
       player.dashVx = Math.cos(dashAngle) * PLAYER_CFG.dashSpeed;
@@ -794,6 +787,10 @@ export function createWorld(random) {
       player.dashTimer = player.dashCooldown;
       events |= EV_DASH;
       spawnBurst(player.x, player.y, '#67e8f9', 12, 60, 190, 2.8);
+      if (state.synergyFlags.phaseOverdrive) {
+        player.shield = Math.min(player.maxShield, player.shield + 14);
+        spawnText(player.x, player.y - 24, '+14 AEGIS', '#60a5fa', 12);
+      }
       if (player.dashWake > 0) {
         const wakeRad = 95 + player.dashWake * 20;
         spawnRing(player.x, player.y, wakeRad, 0.34, '#34d399', 3.5);
@@ -807,7 +804,6 @@ export function createWorld(random) {
       }
     }
 
-    // Player movement.
     if (player.dashActiveTimer > 0) {
       player.dashActiveTimer = Math.max(0, player.dashActiveTimer - dt);
       player.vx = player.dashVx;
@@ -824,13 +820,15 @@ export function createWorld(random) {
     player.x = clamp(player.x + player.vx * dt, FIELD.arenaLeft + player.radius, FIELD.arenaRight - player.radius);
     player.y = clamp(player.y + player.vy * dt, FIELD.arenaTop + player.radius, FIELD.arenaBottom - player.radius);
 
-    // Update dash afterimages.
     for (let i = state.afterimages.length - 1; i >= 0; i -= 1) {
       state.afterimages[i].life -= dt;
       if (state.afterimages[i].life <= 0) state.afterimages.splice(i, 1);
     }
+    for (let i = state.arcs.length - 1; i >= 0; i -= 1) {
+      state.arcs[i].life -= dt;
+      if (state.arcs[i].life <= 0) state.arcs.splice(i, 1);
+    }
 
-    // Aiming (cursor if active, else nearest threat).
     if (ctrl.aimActive && !harmless) {
       player.aimAngle = Math.atan2(ctrl.aimY - player.y, ctrl.aimX - player.x);
     } else {
@@ -840,16 +838,12 @@ export function createWorld(random) {
         const e = pools.enemies[i];
         if (!e.active) continue;
         const dSq = (e.x - player.x) ** 2 + (e.y - player.y) ** 2;
-        if (dSq < bestDistSq) {
-          bestDistSq = dSq;
-          nearest = e;
-        }
+        if (dSq < bestDistSq) { bestDistSq = dSq; nearest = e; }
       }
       if (nearest) player.aimAngle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
       else if (moveX !== 0 || moveY !== 0) player.aimAngle = Math.atan2(moveY, moveX);
     }
 
-    // EMP Nova ability.
     if (!harmless && ctrl.emp && player.empTimer === 0) {
       player.empTimer = player.empCooldown;
       events |= EV_EMP;
@@ -868,64 +862,70 @@ export function createWorld(random) {
           spawnParticle(b.x, b.y, random.range(-70, 70), random.range(-70, 70), 2.4, 0.25, '#a78bfa');
         }
       }
+      const stunBonus = state.synergyFlags.aegisNexus ? 0.9 : 0;
       for (let i = 0; i < pools.enemies.length; i += 1) {
         const e = pools.enemies[i];
         if (!e.active) continue;
         if (Math.hypot(e.x - player.x, e.y - player.y) <= player.empRadius + e.radius) {
-          if (!e.isBoss) e.stun = Math.max(e.stun, player.empStun);
+          if (!e.isBoss) e.stun = Math.max(e.stun, player.empStun + stunBonus);
           events |= damageEnemy(e, i, player.empDamage, Math.atan2(e.y - player.y, e.x - player.x), false, true, harmless);
         }
       }
     }
 
-    // Primary weapon firing.
+    const overcharged = state.overchargeTimer > 0;
     if ((ctrl.fire || harmless) && player.fireTimer === 0) {
-      player.fireTimer = harmless ? 0.34 : player.fireInterval;
+      player.fireTimer = harmless ? 0.34 : player.fireInterval * (overcharged ? 0.74 : 1);
+      player.volleyCounter += 1;
       const count = player.boltCount;
       const spreadStep = count === 1 ? 0 : Math.max(0.055, 0.095 - (count - 2) * 0.012);
       const startAngle = player.aimAngle - ((count - 1) * spreadStep) / 2;
+      const bSpeed = player.boltSpeed * (overcharged ? 1.18 : 1);
       for (let k = 0; k < count; k += 1) {
         const a = startAngle + k * spreadStep;
-        const crit = !harmless && random.chance(player.critChance);
+        const crit = !harmless && random.chance(player.critChance + (overcharged ? 0.12 : 0));
         const dmg = player.boltDamage * (crit ? PLAYER_CFG.critMult : 1);
         const mx = player.x + Math.cos(a) * (player.radius + 7);
         const my = player.y + Math.sin(a) * (player.radius + 7);
-        spawnPlayerBolt(mx, my, a, player.boltSpeed, dmg, crit, player.pierce);
+        spawnPlayerBolt(mx, my, a, bSpeed, dmg, crit, player.pierce, overcharged ? '#fde047' : '#67e8f9');
         if (!harmless) state.shotsFired += 1;
+      }
+      if (!harmless && state.synergyFlags.solarStorm && player.volleyCounter % 4 === 0) {
+        for (let s = -1; s <= 1; s += 2) {
+          const sa = player.aimAngle + s * 0.28;
+          spawnPlayerBolt(player.x, player.y, sa, bSpeed * 1.05, player.boltDamage * 0.8, false, 1, '#38bdf8');
+          state.shotsFired += 1;
+        }
       }
       if (!harmless) events |= EV_SHOOT;
     }
 
-    // Autonomous Orbital Sentinel drones.
     if (player.drones > 0) {
       player.droneAngle = wrapAngle(player.droneAngle + dt * 2.5);
       player.droneFireTimer -= dt;
       if (player.droneFireTimer <= 0) {
-        player.droneFireTimer = Math.max(0.24, 0.56 - player.drones * 0.09);
+        player.droneFireTimer = Math.max(0.22, 0.56 - player.drones * 0.09);
         let target = null;
         let minD = 420 * 420;
         for (let i = 0; i < pools.enemies.length; i += 1) {
           const e = pools.enemies[i];
           if (!e.active) continue;
           const dSq = (e.x - player.x) ** 2 + (e.y - player.y) ** 2;
-          if (dSq < minD) {
-            minD = dSq;
-            target = e;
-          }
+          if (dSq < minD) { minD = dSq; target = e; }
         }
         if (target) {
+          const droneMult = state.synergyFlags.aegisNexus ? 0.92 : 0.72;
           for (let d = 0; d < player.drones; d += 1) {
             const da = player.droneAngle + (Math.PI * 2 * d) / player.drones;
             const dx = player.x + Math.cos(da) * 42;
             const dy = player.y + Math.sin(da) * 42;
             const aim = Math.atan2(target.y - dy, target.x - dx);
-            spawnPlayerBolt(dx, dy, aim, player.boltSpeed * 0.95, player.boltDamage * 0.72, false, 0, '#2dd4bf', 3.4);
+            spawnPlayerBolt(dx, dy, aim, player.boltSpeed * 0.95, player.boltDamage * droneMult, false, 0, '#2dd4bf', 3.4);
           }
         }
       }
     }
 
-    // Wave progression & spawning.
     const wave = WAVES[state.waveIndex];
     state.waveElapsed += dt;
     state.spawnTimer -= dt;
@@ -951,10 +951,7 @@ export function createWorld(random) {
         state.waveBannerText = nextWave.title;
         state.waveBannerTimer = 2.8;
         state.spawnTimer = 1.1;
-        if (nextWave.boss) {
-          spawnBoss();
-          events |= EV_BOSS;
-        }
+        if (nextWave.boss) { spawnBoss(); events |= EV_BOSS; }
       }
     } else if (state.boss && state.boss.active) {
       if (state.spawnTimer <= 0 && activeEnemies < 6) {
@@ -963,22 +960,37 @@ export function createWorld(random) {
       }
     }
 
-    // Update player bolts.
     for (let i = 0; i < pools.playerBolts.length; i += 1) {
       const b = pools.playerBolts[i];
       if (!b.active) continue;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
-      if (
-        b.life <= 0 ||
-        b.x < FIELD.arenaLeft ||
-        b.x > FIELD.arenaRight ||
-        b.y < FIELD.arenaTop ||
-        b.y > FIELD.arenaBottom
-      ) {
+      if (b.life <= 0 || b.x < FIELD.arenaLeft || b.x > FIELD.arenaRight || b.y < FIELD.arenaTop || b.y > FIELD.arenaBottom) {
         b.active = false;
         continue;
+      }
+      const pylonHit = damagePylonFromPlayerBolt(pylons, b);
+      if (pylonHit && pylonHit.detonated) {
+        events |= EV_PYLON;
+        const py = pylonHit.pylon;
+        state.shake = Math.max(state.shake, 9);
+        spawnRing(py.x, py.y, PYLON_CFG.blastRadius, 0.42, '#fbbf24', 4.5);
+        spawnRing(py.x, py.y, PYLON_CFG.blastRadius * 0.65, 0.34, '#67e8f9', 3);
+        spawnBurst(py.x, py.y, '#38bdf8', 22, 80, 260, 3.6);
+        if (!harmless) {
+          state.score += Math.round(PYLON_CFG.scoreBonus * state.difficulty.scoreMult * state.combo);
+          spawnText(py.x, py.y - 24, 'PYLON OVERLOAD!', '#fbbf24', 15);
+        }
+        for (let k = 0; k < pools.enemies.length; k += 1) {
+          const en = pools.enemies[k];
+          if (!en.active) continue;
+          if (Math.hypot(en.x - py.x, en.y - py.y) <= PYLON_CFG.blastRadius + en.radius) {
+            state.arcs.push({ x1: py.x, y1: py.y, x2: en.x, y2: en.y, color: '#67e8f9', life: 0.34, maxLife: 0.34 });
+            if (!en.isBoss) en.stun = Math.max(en.stun, 1.2);
+            events |= damageEnemy(en, k, PYLON_CFG.blastDamage, Math.atan2(en.y - py.y, en.x - py.x), false, true, harmless);
+          }
+        }
       }
       for (let j = 0; j < pools.enemies.length; j += 1) {
         if (j === b.lastHitIndex) continue;
@@ -989,17 +1001,12 @@ export function createWorld(random) {
           b.lastHitIndex = j;
           events |= damageEnemy(e, j, b.damage, Math.atan2(b.vy, b.vx), b.crit, false, harmless);
           spawnBurst(b.x, b.y, b.color, 4, 40, 130, 2);
-          if (b.pierce > 0) {
-            b.pierce -= 1;
-          } else {
-            b.active = false;
-            break;
-          }
+          if (b.pierce > 0) b.pierce -= 1;
+          else { b.active = false; break; }
         }
       }
     }
 
-    // Update enemies + enemy-player contact.
     for (let i = 0; i < pools.enemies.length; i += 1) {
       const e = pools.enemies[i];
       if (!e.active) continue;
@@ -1013,7 +1020,6 @@ export function createWorld(random) {
       }
     }
 
-    // Update enemy bolts.
     for (let i = 0; i < pools.enemyBolts.length; i += 1) {
       const b = pools.enemyBolts[i];
       if (!b.active) continue;
@@ -1022,14 +1028,13 @@ export function createWorld(random) {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
-      if (
-        b.life <= 0 ||
-        b.x < FIELD.arenaLeft - 10 ||
-        b.x > FIELD.arenaRight + 10 ||
-        b.y < FIELD.arenaTop - 10 ||
-        b.y > FIELD.arenaBottom + 10
-      ) {
+      if (b.life <= 0 || b.x < FIELD.arenaLeft - 10 || b.x > FIELD.arenaRight + 10 || b.y < FIELD.arenaTop - 10 || b.y > FIELD.arenaBottom + 10) {
         b.active = false;
+        continue;
+      }
+      if (interceptEnemyBoltWithPylons(pylons, b)) {
+        b.active = false;
+        spawnBurst(b.x, b.y, '#67e8f9', 4, 40, 110, 2);
         continue;
       }
       if (!harmless) {
@@ -1041,7 +1046,6 @@ export function createWorld(random) {
       }
     }
 
-    // Update mortar hazard rings.
     for (let i = 0; i < pools.mortars.length; i += 1) {
       const m = pools.mortars[i];
       if (!m.active) continue;
@@ -1057,16 +1061,12 @@ export function createWorld(random) {
       }
     }
 
-    // Update XP crystals + magnet pickup.
     for (let i = 0; i < pools.crystals.length; i += 1) {
       const c = pools.crystals[i];
       if (!c.active) continue;
       c.life -= dt;
       c.pulse += dt * 5;
-      if (c.life <= 0) {
-        c.active = false;
-        continue;
-      }
+      if (c.life <= 0) { c.active = false; continue; }
       c.vx *= Math.pow(0.05, dt);
       c.vy *= Math.pow(0.05, dt);
       const dx = player.x - c.x;
@@ -1087,6 +1087,7 @@ export function createWorld(random) {
           state.combo = Math.min(8, Math.round((state.combo + 0.08) * 100) / 100);
           state.comboTimer = Math.max(state.comboTimer, 3.2);
           if (state.combo > state.peakCombo) state.peakCombo = state.combo;
+          if (updateOverchargeState(state, 0, 5)) events |= EV_OVERCHARGE;
           events |= EV_CRYSTAL;
           if (state.xp >= state.xpNext) {
             state.xp -= state.xpNext;
@@ -1099,15 +1100,11 @@ export function createWorld(random) {
       }
     }
 
-    // Update particles, rings, floating text.
     for (let i = 0; i < pools.particles.length; i += 1) {
       const p = pools.particles[i];
       if (!p.active) continue;
       p.life -= dt;
-      if (p.life <= 0) {
-        p.active = false;
-        continue;
-      }
+      if (p.life <= 0) { p.active = false; continue; }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.vx *= Math.pow(0.14, dt);
@@ -1118,10 +1115,7 @@ export function createWorld(random) {
       const r = pools.rings[i];
       if (!r.active) continue;
       r.life -= dt;
-      if (r.life <= 0) {
-        r.active = false;
-        continue;
-      }
+      if (r.life <= 0) { r.active = false; continue; }
       const t = 1 - r.life / r.maxLife;
       r.radius = 8 + (r.maxRadius - 8) * (1 - (1 - t) * (1 - t));
     }
@@ -1130,10 +1124,7 @@ export function createWorld(random) {
       const t = pools.texts[i];
       if (!t.active) continue;
       t.life -= dt;
-      if (t.life <= 0) {
-        t.active = false;
-        continue;
-      }
+      if (t.life <= 0) { t.active = false; continue; }
       t.y += t.vy * dt;
     }
 

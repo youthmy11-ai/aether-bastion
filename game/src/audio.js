@@ -1,6 +1,4 @@
-// Pure Web Audio API procedural sound effects synthesizer (zero external assets).
-// Safe in headless or autoplay-locked environments: unlocks gracefully on first user gesture.
-
+// Pure Web Audio API procedural sound effects synthesizer (zero external files).
 export function createAudio(initialMuted = false) {
   let ctx = null;
   let master = null;
@@ -26,9 +24,7 @@ export function createAudio(initialMuted = false) {
         return null;
       }
     }
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     return ctx;
   }
 
@@ -71,29 +67,13 @@ export function createAudio(initialMuted = false) {
   }
 
   return {
-    unlock() {
-      ensureContext();
-    },
-    isMuted() {
-      return muted;
-    },
-    setMuted(next) {
-      muted = Boolean(next);
-      if (!muted) ensureContext();
-      return muted;
-    },
-    toggleMute() {
-      return this.setMuted(!muted);
-    },
-    shoot(pitchScale = 1) {
-      tone('triangle', 680 * pitchScale, 240 * pitchScale, 0.065, 0.14);
-    },
-    crit() {
-      tone('sawtooth', 980, 360, 0.09, 0.14);
-    },
-    deflect() {
-      tone('sine', 1240, 880, 0.07, 0.12);
-    },
+    unlock() { ensureContext(); },
+    isMuted() { return muted; },
+    setMuted(next) { muted = Boolean(next); if (!muted) ensureContext(); return muted; },
+    toggleMute() { return this.setMuted(!muted); },
+    shoot(pitchScale = 1) { tone('triangle', 680 * pitchScale, 240 * pitchScale, 0.065, 0.14); },
+    crit() { tone('sawtooth', 980, 360, 0.09, 0.14); },
+    deflect() { tone('sine', 1240, 880, 0.07, 0.12); },
     kill(isHeavy = false) {
       noise(isHeavy ? 0.24 : 0.14, isHeavy ? 320 : 520, isHeavy ? 0.36 : 0.22);
       tone('sawtooth', isHeavy ? 170 : 240, 52, isHeavy ? 0.22 : 0.13, isHeavy ? 0.24 : 0.16);
@@ -102,22 +82,22 @@ export function createAudio(initialMuted = false) {
       const f = Math.min(1320, 520 + combo * 42);
       tone('sine', f, f * 1.28, 0.08, 0.13);
     },
-    dash() {
-      noise(0.14, 1400, 0.18, 0.8);
-      tone('sine', 290, 620, 0.12, 0.16);
-    },
+    dash() { noise(0.14, 1400, 0.18, 0.8); tone('sine', 290, 620, 0.12, 0.16); },
     emp() {
       noise(0.38, 220, 0.42, 0.9);
       tone('sawtooth', 260, 48, 0.36, 0.3);
       tone('triangle', 760, 140, 0.28, 0.22, 0.03);
     },
-    hit() {
-      noise(0.18, 260, 0.34, 1.0);
-      tone('square', 150, 55, 0.18, 0.26);
+    pylonBlast() {
+      noise(0.32, 420, 0.36, 1.0);
+      tone('triangle', 480, 110, 0.26, 0.24);
     },
-    sniperWarn() {
-      tone('sine', 960, 1180, 0.08, 0.08);
+    overcharge() {
+      tone('triangle', 440, 880, 0.18, 0.2, 0);
+      tone('sine', 660, 1320, 0.22, 0.18, 0.08);
     },
+    hit() { noise(0.18, 260, 0.34, 1.0); tone('square', 150, 55, 0.18, 0.26); },
+    sniperWarn() { tone('sine', 960, 1180, 0.08, 0.08); },
     upgradeOpen() {
       tone('triangle', 392, 523, 0.12, 0.18, 0);
       tone('triangle', 523, 659, 0.14, 0.18, 0.08);
@@ -133,9 +113,7 @@ export function createAudio(initialMuted = false) {
     },
     victory() {
       const notes = [523.25, 659.25, 783.99, 1046.5];
-      for (let i = 0; i < notes.length; i += 1) {
-        tone('triangle', notes[i], notes[i] * 1.02, 0.28, 0.2, i * 0.1);
-      }
+      for (let i = 0; i < notes.length; i += 1) tone('triangle', notes[i], notes[i] * 1.02, 0.28, 0.2, i * 0.1);
     },
     over() {
       tone('sawtooth', 260, 140, 0.22, 0.22, 0);

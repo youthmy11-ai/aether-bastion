@@ -1,5 +1,5 @@
-// High-craft geometric Canvas2D renderer: parallax starfield, reactive grid, vector ships,
-// telegraphs, particles, floating combat numbers, custom cursor, and delegated HUD/overlays.
+// High-craft Canvas2D renderer: cosmic nebulae, parallax stars, interactive pylons,
+// telegraphs, overcharge auras, particles, floating combat text, and clean screen gating.
 import { FIELD, FONT_MONO, PALETTE, SCREEN } from './config.js';
 import {
   drawEndOverlay,
@@ -28,15 +28,30 @@ export function createRenderer(canvas) {
     ctx.fillStyle = PALETTE.arenaBg;
     ctx.fillRect(0, 0, FIELD.width, FIELD.height);
 
-    // Subtle atmospheric radial gradient in arena center.
-    const grad = ctx.createRadialGradient(640, 384, 40, 640, 384, 620);
-    grad.addColorStop(0, 'rgba(14, 116, 144, 0.14)');
-    grad.addColorStop(0.6, 'rgba(30, 58, 138, 0.06)');
-    grad.addColorStop(1, 'rgba(6, 9, 19, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    // Multi-layered cosmic nebulae for depth behind tactical grid
+    const nebulae = state.nebulae;
+    for (let i = 0; i < nebulae.length; i += 1) {
+      const n = nebulae[i];
+      const grad = ctx.createRadialGradient(n.x, n.y, 18, n.x, n.y, n.r);
+      grad.addColorStop(0, n.inner);
+      grad.addColorStop(1, n.outer);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    }
 
-    // Parallax starfield.
+    // Subtle orbital station ring in background
+    ctx.save();
+    ctx.translate(640, 386);
+    ctx.rotate(state.elapsed * 0.08);
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.08)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([18, 14]);
+    ctx.beginPath();
+    ctx.arc(0, 0, 265, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
     const stars = state.stars;
     for (let i = 0; i < stars.length; i += 1) {
       const s = stars[i];
@@ -46,15 +61,9 @@ export function createRenderer(canvas) {
     }
     ctx.globalAlpha = 1;
 
-    // Tactical chamber grid inside arena bounds.
     ctx.save();
     ctx.beginPath();
-    ctx.rect(
-      FIELD.arenaLeft,
-      FIELD.arenaTop,
-      FIELD.arenaRight - FIELD.arenaLeft,
-      FIELD.arenaBottom - FIELD.arenaTop,
-    );
+    ctx.rect(FIELD.arenaLeft, FIELD.arenaTop, FIELD.arenaRight - FIELD.arenaLeft, FIELD.arenaBottom - FIELD.arenaTop);
     ctx.clip();
 
     const step = 48;
@@ -71,25 +80,18 @@ export function createRenderer(canvas) {
     }
     ctx.stroke();
 
-    // Reactive pulse highlight on EMP or boss shockwaves.
     if (state.gridPulse > 0) {
-      ctx.strokeStyle = `rgba(103, 232, 249, ${(state.gridPulse * 0.32).toFixed(3)})`;
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(103, 232, 249, ${(state.gridPulse * 0.34).toFixed(3)})`;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.arc(state.gridPulseX, state.gridPulseY, (1 - state.gridPulse) * 320 + 30, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
 
-    // Arena boundary frame with corner accents.
     ctx.strokeStyle = PALETTE.border;
     ctx.lineWidth = 2;
-    ctx.strokeRect(
-      FIELD.arenaLeft,
-      FIELD.arenaTop,
-      FIELD.arenaRight - FIELD.arenaLeft,
-      FIELD.arenaBottom - FIELD.arenaTop,
-    );
+    ctx.strokeRect(FIELD.arenaLeft, FIELD.arenaTop, FIELD.arenaRight - FIELD.arenaLeft, FIELD.arenaBottom - FIELD.arenaTop);
     ctx.strokeStyle = PALETTE.cyan;
     ctx.lineWidth = 2.5;
     const cl = 24;
@@ -105,6 +107,60 @@ export function createRenderer(canvas) {
     ctx.stroke();
   }
 
+  function drawPylons(state) {
+    const pylons = state.pylons;
+    for (let i = 0; i < pylons.length; i += 1) {
+      const py = pylons[i];
+      ctx.save();
+      ctx.translate(py.x, py.y);
+      if (!py.active) {
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(0, 0, py.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        continue;
+      }
+      const ratio = Math.max(0, py.hp / py.maxHp);
+      const glow = py.flash > 0 ? '#ffffff' : ratio < 0.45 ? '#fbbf24' : '#38bdf8';
+      ctx.fillStyle = ratio < 0.45 ? 'rgba(251, 191, 36, 0.22)' : 'rgba(14, 116, 144, 0.22)';
+      ctx.beginPath();
+      ctx.arc(0, 0, py.radius + 12 + Math.sin(py.pulse) * 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = glow;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(0, 0, py.radius + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+      ctx.stroke();
+
+      ctx.rotate(py.pulse * 0.25);
+      ctx.fillStyle = py.flash > 0 ? '#ffffff' : '#0f233c';
+      ctx.strokeStyle = glow;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      for (let k = 0; k < 6; k += 1) {
+        const a = (k * Math.PI) / 3;
+        if (k === 0) ctx.moveTo(Math.cos(a) * py.radius, Math.sin(a) * py.radius);
+        else ctx.lineTo(Math.cos(a) * py.radius, Math.sin(a) * py.radius);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, 7.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   function drawMortars(state) {
     const mortars = state.pools.mortars;
     for (let i = 0; i < mortars.length; i += 1) {
@@ -112,21 +168,20 @@ export function createRenderer(canvas) {
       if (!m.active) continue;
       const t = Math.min(1, m.elapsed / m.duration);
       ctx.save();
-      ctx.fillStyle = `rgba(244, 63, 94, ${(0.08 + t * 0.22).toFixed(3)})`;
+      ctx.fillStyle = `rgba(244, 63, 94, ${(0.09 + t * 0.24).toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.strokeStyle = t > 0.78 ? '#fbbf24' : '#fb7185';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.setLineDash([7, 5]);
       ctx.beginPath();
       ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Inner expanding detonation fill circle.
-      ctx.fillStyle = 'rgba(251, 113, 133, 0.28)';
+      ctx.fillStyle = 'rgba(251, 113, 133, 0.3)';
       ctx.beginPath();
       ctx.arc(m.x, m.y, m.radius * t, 0, Math.PI * 2);
       ctx.fill();
@@ -149,17 +204,14 @@ export function createRenderer(canvas) {
       const s = 5.5 + Math.sin(c.pulse) * 1.1;
       ctx.save();
       ctx.translate(c.x, c.y);
-      ctx.fillStyle = 'rgba(56, 189, 248, 0.26)';
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.28)';
       ctx.beginPath();
       ctx.arc(0, 0, s + 4, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.fillStyle = '#67e8f9';
       ctx.beginPath();
-      ctx.moveTo(0, -s);
-      ctx.lineTo(s * 0.72, 0);
-      ctx.lineTo(0, s);
-      ctx.lineTo(-s * 0.72, 0);
+      ctx.moveTo(0, -s); ctx.lineTo(s * 0.72, 0); ctx.lineTo(0, s); ctx.lineTo(-s * 0.72, 0);
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = '#f8fafc';
@@ -169,10 +221,9 @@ export function createRenderer(canvas) {
   }
 
   function drawEnemy(e, state) {
-    // Sniper & Boss aiming laser telegraph
     if (e.telegraph > 0 && (e.kind === 'sniper' || e.isBoss)) {
       const locked = e.telegraph <= 0.24;
-      const len = 1100;
+      const len = 1150;
       ctx.save();
       if (e.isBoss && e.bossPhase === 3) {
         ctx.strokeStyle = 'rgba(244, 63, 94, 0.22)';
@@ -182,8 +233,8 @@ export function createRenderer(canvas) {
         ctx.lineTo(e.x + Math.cos(e.aimAngle) * 760, e.y + Math.sin(e.aimAngle) * 760);
         ctx.stroke();
       }
-      ctx.strokeStyle = locked ? '#fbbf24' : 'rgba(255, 183, 3, 0.52)';
-      ctx.lineWidth = locked ? 3.2 : 1.6;
+      ctx.strokeStyle = locked ? '#fbbf24' : 'rgba(255, 183, 3, 0.56)';
+      ctx.lineWidth = locked ? 3.5 : 1.7;
       if (!locked) ctx.setLineDash([10, 8]);
       ctx.beginPath();
       ctx.moveTo(e.x, e.y);
@@ -201,19 +252,22 @@ export function createRenderer(canvas) {
 
     if (e.isBoss) {
       const pCol = e.bossPhase === 3 ? '#fbbf24' : e.bossPhase === 2 ? '#fb7185' : '#f43f5e';
-      // Rotating outer defense ring
+      ctx.fillStyle = 'rgba(244, 63, 94, 0.14)';
+      ctx.beginPath();
+      ctx.arc(0, 0, e.radius + 22, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.save();
       ctx.rotate(state.elapsed * 0.9);
       ctx.strokeStyle = hit ? '#ffffff' : pCol;
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 3.2;
       for (let k = 0; k < 4; k += 1) {
         ctx.beginPath();
-        ctx.arc(0, 0, e.radius + 9, k * Math.PI * 0.5 + 0.14, (k + 1) * Math.PI * 0.5 - 0.14);
+        ctx.arc(0, 0, e.radius + 10, k * Math.PI * 0.5 + 0.14, (k + 1) * Math.PI * 0.5 - 0.14);
         ctx.stroke();
       }
       ctx.restore();
 
-      // Main octagonal hull
       ctx.fillStyle = hit ? '#ffffff' : '#1e1b2e';
       ctx.strokeStyle = hit ? '#ffffff' : pCol;
       ctx.lineWidth = 3;
@@ -228,25 +282,19 @@ export function createRenderer(canvas) {
       ctx.fill();
       ctx.stroke();
 
-      // Forward rail pylons
       ctx.fillStyle = pCol;
       ctx.fillRect(10, -24, 28, 7);
       ctx.fillRect(10, 17, 28, 7);
 
-      // Reactor core
       ctx.fillStyle = e.telegraph > 0 ? '#fbbf24' : pCol;
-      ctx.beginPath();
-      ctx.arc(0, 0, 15, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
     } else if (e.kind === 'swarmer' || e.kind === 'shard') {
       const col = hit ? '#ffffff' : e.telegraph > 0 ? '#fbbf24' : e.kind === 'shard' ? '#e879f9' : '#ff4d6d';
       ctx.fillStyle = hit ? '#ffffff' : '#2a0f1c';
       ctx.strokeStyle = col;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.moveTo(e.radius + 3, 0);
       ctx.lineTo(-e.radius * 0.85, -e.radius * 0.82);
@@ -256,14 +304,12 @@ export function createRenderer(canvas) {
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.arc(1, 0, e.kind === 'shard' ? 2.5 : 3.6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(1, 0, e.kind === 'shard' ? 2.5 : 3.8, 0, Math.PI * 2); ctx.fill();
     } else if (e.kind === 'sniper') {
       const col = hit ? '#ffffff' : '#ffb703';
       ctx.fillStyle = hit ? '#ffffff' : '#271e0a';
       ctx.strokeStyle = col;
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = 2.3;
       ctx.beginPath();
       ctx.moveTo(e.radius + 7, 0);
       ctx.lineTo(-2, -e.radius * 0.72);
@@ -278,7 +324,7 @@ export function createRenderer(canvas) {
       const col = hit ? '#ffffff' : '#38bdf8';
       ctx.fillStyle = hit ? '#ffffff' : '#0f253a';
       ctx.strokeStyle = col;
-      ctx.lineWidth = 2.4;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
       for (let k = 0; k < 6; k += 1) {
         const a = (k * Math.PI) / 3;
@@ -288,25 +334,19 @@ export function createRenderer(canvas) {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      // Directional front energy shield arc
       ctx.strokeStyle = '#67e8f9';
-      ctx.lineWidth = 4.5;
+      ctx.lineWidth = 4.8;
       ctx.beginPath();
       ctx.arc(0, 0, e.radius + 6, -0.68, 0.68);
       ctx.stroke();
       ctx.fillStyle = '#fb7185';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 6.5, 0, Math.PI * 2); ctx.fill();
     } else if (e.kind === 'mortar') {
       const col = hit ? '#ffffff' : '#fb7185';
       ctx.fillStyle = hit ? '#ffffff' : '#2a1322';
       ctx.strokeStyle = col;
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.lineWidth = 2.3;
+      ctx.beginPath(); ctx.arc(0, 0, e.radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#fbbf24';
       ctx.fillRect(-6, -12, 12, 6);
       ctx.fillRect(-6, 6, 12, 6);
@@ -314,50 +354,43 @@ export function createRenderer(canvas) {
       const col = hit ? '#ffffff' : '#c084fc';
       ctx.fillStyle = hit ? '#ffffff' : '#231338';
       ctx.strokeStyle = col;
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = 2.3;
       ctx.beginPath();
-      ctx.moveTo(0, -e.radius);
-      ctx.lineTo(e.radius, 0);
-      ctx.lineTo(0, e.radius);
-      ctx.lineTo(-e.radius, 0);
+      ctx.moveTo(0, -e.radius); ctx.lineTo(e.radius, 0); ctx.lineTo(0, e.radius); ctx.lineTo(-e.radius, 0);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
       ctx.strokeStyle = '#e879f9';
-      ctx.beginPath();
-      ctx.arc(0, 0, e.radius * 0.48, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, e.radius * 0.48, 0, Math.PI * 2); ctx.stroke();
     }
 
     if (stunned) {
       ctx.strokeStyle = '#a78bfa';
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, e.radius + 8, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, e.radius + 8, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
 
-    // Small overhead HP bar on damaged non-boss enemies
     if (!e.isBoss && e.hp < e.maxHp) {
       const w = e.radius * 1.9;
       ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(e.x - w / 2, e.y - e.radius - 10, w, 4);
+      ctx.fillRect(e.x - w / 2, e.y - e.radius - 10, w, 4.5);
       ctx.fillStyle = '#fb7185';
-      ctx.fillRect(e.x - w / 2, e.y - e.radius - 10, w * Math.max(0, e.hp / e.maxHp), 4);
+      ctx.fillRect(e.x - w / 2, e.y - e.radius - 10, w * Math.max(0, e.hp / e.maxHp), 4.5);
     }
   }
 
   function drawPlayer(state) {
     const p = state.player;
-    // Dash afterimages
+    const overcharged = state.overchargeTimer > 0;
+
     for (let i = 0; i < state.afterimages.length; i += 1) {
       const g = state.afterimages[i];
       ctx.save();
-      ctx.globalAlpha = (g.life / 0.22) * 0.45;
+      ctx.globalAlpha = (g.life / 0.22) * 0.48;
       ctx.translate(g.x, g.y);
       ctx.rotate(g.angle);
-      ctx.fillStyle = '#67e8f9';
+      ctx.fillStyle = overcharged ? '#fbbf24' : '#67e8f9';
       ctx.beginPath();
       ctx.moveTo(p.radius + 4, 0);
       ctx.lineTo(-p.radius, -p.radius * 0.78);
@@ -368,7 +401,6 @@ export function createRenderer(canvas) {
       ctx.restore();
     }
 
-    // Orbital Sentinel Drones
     for (let d = 0; d < p.drones; d += 1) {
       const a = p.droneAngle + (Math.PI * 2 * d) / p.drones;
       const dx = p.x + Math.cos(a) * 42;
@@ -377,15 +409,10 @@ export function createRenderer(canvas) {
       ctx.translate(dx, dy);
       ctx.fillStyle = '#0f292e';
       ctx.strokeStyle = '#2dd4bf';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#99f6e4';
-      ctx.beginPath();
-      ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 2.8, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
 
@@ -395,32 +422,37 @@ export function createRenderer(canvas) {
     ctx.save();
     ctx.translate(p.x, p.y);
 
-    // Shield halo
-    if (p.shield > 0) {
-      ctx.strokeStyle = `rgba(56, 189, 248, ${(0.25 + 0.3 * (p.shield / p.maxShield)).toFixed(2)})`;
-      ctx.lineWidth = 2;
+    if (overcharged) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.55)';
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.arc(0, 0, p.radius + 7, 0, Math.PI * 2);
+      ctx.arc(0, 0, p.radius + 13, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (p.shield > 0) {
+      ctx.strokeStyle = `rgba(56, 189, 248, ${(0.3 + 0.34 * (p.shield / p.maxShield)).toFixed(2)})`;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius + 7.5, 0, Math.PI * 2);
       ctx.stroke();
     }
 
     ctx.rotate(p.aimAngle);
-    // Thruster flame
     const moving = Math.hypot(p.vx, p.vy) > 20;
     if (moving || p.dashActiveTimer > 0) {
-      ctx.fillStyle = p.dashActiveTimer > 0 ? '#a78bfa' : '#38bdf8';
+      ctx.fillStyle = p.dashActiveTimer > 0 ? '#a78bfa' : overcharged ? '#fbbf24' : '#38bdf8';
       ctx.beginPath();
-      ctx.moveTo(-p.radius * 0.55, -5);
-      ctx.lineTo(-p.radius - (p.dashActiveTimer > 0 ? 18 : 9), 0);
-      ctx.lineTo(-p.radius * 0.55, 5);
+      ctx.moveTo(-p.radius * 0.55, -5.5);
+      ctx.lineTo(-p.radius - (p.dashActiveTimer > 0 ? 20 : 11), 0);
+      ctx.lineTo(-p.radius * 0.55, 5.5);
       ctx.closePath();
       ctx.fill();
     }
 
-    // Main Bastion hull
     ctx.fillStyle = p.flash > 0 ? '#fb7185' : '#0c1f38';
-    ctx.strokeStyle = p.dashInvulnTimer > 0 ? '#ffffff' : '#67e8f9';
-    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = p.dashInvulnTimer > 0 ? '#ffffff' : overcharged ? '#fde047' : '#67e8f9';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.moveTo(p.radius + 6, 0);
     ctx.lineTo(-p.radius * 0.75, -p.radius * 0.85);
@@ -430,16 +462,12 @@ export function createRenderer(canvas) {
     ctx.fill();
     ctx.stroke();
 
-    // Inner wing accents & cockpit
-    ctx.fillStyle = '#38bdf8';
-    ctx.beginPath();
-    ctx.arc(2, 0, 4.5, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = overcharged ? '#fbbf24' : '#38bdf8';
+    ctx.beginPath(); ctx.arc(2, 0, 4.6, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 
-  function drawBoltsAndEffects(state) {
-    // Player bolts
+  function drawBoltsAndEffects(state, hideFloatingText) {
     const pBolts = state.pools.playerBolts;
     for (let i = 0; i < pBolts.length; i += 1) {
       const b = pBolts[i];
@@ -449,13 +477,12 @@ export function createRenderer(canvas) {
       ctx.translate(b.x, b.y);
       ctx.rotate(a);
       ctx.fillStyle = b.color;
-      ctx.fillRect(-10, -b.radius * 0.52, 16, b.radius * 1.04);
+      ctx.fillRect(-11, -b.radius * 0.56, 18, b.radius * 1.12);
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-3, -1.2, 8, 2.4);
+      ctx.fillRect(-3, -1.3, 9, 2.6);
       ctx.restore();
     }
 
-    // Enemy bolts
     const eBolts = state.pools.enemyBolts;
     for (let i = 0; i < eBolts.length; i += 1) {
       const b = eBolts[i];
@@ -466,23 +493,18 @@ export function createRenderer(canvas) {
         ctx.translate(b.x, b.y);
         ctx.rotate(a);
         ctx.fillStyle = b.color;
-        ctx.fillRect(-16, -3, 28, 6);
+        ctx.fillRect(-16, -3.2, 28, 6.4);
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(-10, -1.3, 20, 2.6);
         ctx.restore();
       } else {
         ctx.fillStyle = b.color;
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#fff1f2';
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 0.45, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.radius * 0.45, 0, Math.PI * 2); ctx.fill();
       }
     }
 
-    // Shockwave rings
     const rings = state.pools.rings;
     for (let i = 0; i < rings.length; i += 1) {
       const r = rings[i];
@@ -497,7 +519,30 @@ export function createRenderer(canvas) {
       ctx.restore();
     }
 
-    // Particles
+    const arcs = state.arcs || [];
+    for (let i = 0; i < arcs.length; i += 1) {
+      const arc = arcs[i];
+      const alpha = Math.max(0, arc.life / arc.maxLife);
+      const dx = arc.x2 - arc.x1;
+      const dy = arc.y2 - arc.y1;
+      const nx = -dy * 0.12;
+      const ny = dx * 0.12;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = arc.color;
+      ctx.lineWidth = 4.2;
+      ctx.beginPath();
+      ctx.moveTo(arc.x1, arc.y1);
+      ctx.lineTo(arc.x1 + dx * 0.33 + nx, arc.y1 + dy * 0.33 + ny);
+      ctx.lineTo(arc.x1 + dx * 0.66 - nx * 0.75, arc.y1 + dy * 0.66 - ny * 0.75);
+      ctx.lineTo(arc.x2, arc.y2);
+      ctx.stroke();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     const parts = state.pools.particles;
     for (let i = 0; i < parts.length; i += 1) {
       const p = parts[i];
@@ -508,7 +553,7 @@ export function createRenderer(canvas) {
     }
     ctx.globalAlpha = 1;
 
-    // Floating combat damage & pickup text
+    if (hideFloatingText) return;
     const texts = state.pools.texts;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -525,12 +570,10 @@ export function createRenderer(canvas) {
 
   function drawReticle(ui) {
     if (!ui.pointer || !ui.pointer.active) return;
-    const x = ui.pointer.x;
-    const y = ui.pointer.y;
     ctx.save();
-    ctx.translate(x, y);
-    ctx.strokeStyle = 'rgba(103, 232, 249, 0.85)';
-    ctx.lineWidth = 1.6;
+    ctx.translate(ui.pointer.x, ui.pointer.y);
+    ctx.strokeStyle = 'rgba(103, 232, 249, 0.88)';
+    ctx.lineWidth = 1.8;
     ctx.beginPath();
     ctx.arc(0, 0, 10, 0, Math.PI * 2);
     ctx.moveTo(-15, 0); ctx.lineTo(-6, 0);
@@ -548,16 +591,13 @@ export function createRenderer(canvas) {
 
     const shakeX = state.shake > 0.2 ? (Math.sin(state.elapsed * 73) * state.shake) : 0;
     const shakeY = state.shake > 0.2 ? (Math.cos(state.elapsed * 91) * state.shake) : 0;
-    ctx.setTransform(
-      view.scale,
-      0,
-      0,
-      view.scale,
-      view.x + shakeX * view.scale,
-      view.y + shakeY * view.scale,
-    );
+    ctx.setTransform(view.scale, 0, 0, view.scale, view.x + shakeX * view.scale, view.y + shakeY * view.scale);
+
+    const isEndScreen = screen === SCREEN.VICTORY || screen === SCREEN.OVER;
+    const hideFloatingText = screen !== SCREEN.PLAY;
 
     drawBackdropAndGrid(state);
+    drawPylons(state);
     drawMortars(state);
     drawCrystals(state);
 
@@ -567,18 +607,27 @@ export function createRenderer(canvas) {
     }
 
     drawPlayer(state);
-    drawBoltsAndEffects(state);
+    drawBoltsAndEffects(state, hideFloatingText);
 
     if (screen === SCREEN.TITLE) {
       drawTitleOverlay(ctx, state, ui);
       return;
     }
 
+    if (isEndScreen) {
+      drawEndOverlay(ctx, state, screen, ui);
+      return;
+    }
+
+    if (screen === SCREEN.UPGRADE) {
+      drawUpgradeOverlay(ctx, state);
+      drawHud(ctx, state, ui);
+      return;
+    }
+
     drawHud(ctx, state, ui);
     if (screen === SCREEN.PLAY) drawReticle(ui);
-    else if (screen === SCREEN.UPGRADE) drawUpgradeOverlay(ctx, state);
     else if (screen === SCREEN.PAUSED) drawPausedOverlay(ctx);
-    else if (screen === SCREEN.VICTORY || screen === SCREEN.OVER) drawEndOverlay(ctx, state, screen, ui);
   }
 
   resize();

@@ -14,6 +14,8 @@ import {
   EV_HIT,
   EV_KILL,
   EV_OVER,
+  EV_OVERCHARGE,
+  EV_PYLON,
   EV_SHOOT,
   EV_SNIPER_WARN,
   EV_UPGRADE,
@@ -66,14 +68,11 @@ function writeStorage(key, value) {
 
 function runShot(name) {
   const staged = stageShot(name, world);
-  let painted = 0;
-  function paint() {
+  renderer.draw(world.state, staged.screen, staged.ui);
+  window.__shotReady = true;
+  requestAnimationFrame(() => {
     renderer.draw(world.state, staged.screen, staged.ui);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
+  });
 }
 
 function runGame() {
@@ -251,6 +250,8 @@ function runGame() {
     if (events & EV_CRYSTAL) audio.crystal(world.state.combo);
     if (events & EV_DASH) audio.dash();
     if (events & EV_EMP) audio.emp();
+    if (events & EV_PYLON) audio.pylonBlast();
+    if (events & EV_OVERCHARGE) audio.overcharge();
     if (events & EV_HIT) audio.hit();
     if (events & EV_SNIPER_WARN) audio.sniperWarn();
     if (events & EV_BOSS) audio.bossWarn();

@@ -26,16 +26,16 @@ varying vec3 vWorldPos;
 void main() {
   vec3 dir = normalize(vWorldPos);
   float h = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-  vec3 nadir = vec3(0.22, 0.30, 0.48);
-  vec3 horizon = vec3(0.98, 0.73, 0.44);
-  vec3 mid = vec3(0.42, 0.59, 0.82);
-  vec3 zenith = vec3(0.14, 0.28, 0.52);
-  vec3 col = mix(nadir, horizon, smoothstep(0.28, 0.50, h));
-  col = mix(col, mid, smoothstep(0.50, 0.68, h));
+  vec3 nadir = vec3(0.18, 0.24, 0.38);
+  vec3 horizon = vec3(0.98, 0.68, 0.38);
+  vec3 mid = vec3(0.38, 0.52, 0.78);
+  vec3 zenith = vec3(0.11, 0.20, 0.44);
+  vec3 col = mix(nadir, horizon, smoothstep(0.24, 0.48, h));
+  col = mix(col, mid, smoothstep(0.48, 0.68, h));
   col = mix(col, zenith, smoothstep(0.68, 0.96, h));
   float sunAmt = max(dot(dir, normalize(uSunDir)), 0.0);
-  col += vec3(1.0, 0.84, 0.48) * pow(sunAmt, 14.0) * 0.55;
-  col += vec3(1.0, 0.96, 0.85) * smoothstep(0.996, 0.9992, sunAmt) * 1.4;
+  col += vec3(1.0, 0.78, 0.42) * pow(sunAmt, 10.0) * 0.65;
+  col += vec3(1.0, 0.94, 0.82) * smoothstep(0.994, 0.9995, sunAmt) * 1.6;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -54,10 +54,10 @@ export function createSceneContext(canvas) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.18;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x6e7b94, 0.0028);
+  scene.fog = new THREE.FogExp2(0x5c6a85, 0.0026);
 
   const camera = new THREE.PerspectiveCamera(43, 16 / 9, 0.5, 320);
   camera.position.set(0, 28.5, 31.0);
@@ -77,11 +77,11 @@ export function createSceneContext(canvas) {
   const skyDome = new THREE.Mesh(new THREE.SphereGeometry(180, 32, 20), skyMat);
   scene.add(skyDome);
 
-  // Golden-hour lights
-  const hemiLight = new THREE.HemisphereLight(0xfff1d0, 0x3b4e7a, 0.95);
+  // Golden-hour lights: warm main sunlight, cool sky bounce, amber ground bounce
+  const hemiLight = new THREE.HemisphereLight(0xfff5d8, 0x33446b, 1.05);
   scene.add(hemiLight);
 
-  const sunLight = new THREE.DirectionalLight(0xffcf87, 2.35);
+  const sunLight = new THREE.DirectionalLight(0xffd699, 2.5);
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(2048, 2048);
   sunLight.shadow.camera.near = 10;
@@ -95,7 +95,7 @@ export function createSceneContext(canvas) {
   sunLight.position.set(28, 34, 18);
   scene.add(sunLight);
 
-  const rimLight = new THREE.DirectionalLight(0x7dd3fc, 0.68);
+  const rimLight = new THREE.DirectionalLight(0x60a5fa, 0.75);
   rimLight.position.set(-24, 18, -22);
   scene.add(rimLight);
 
